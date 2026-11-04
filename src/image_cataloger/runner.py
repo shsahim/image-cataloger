@@ -17,7 +17,7 @@ from typing import Callable
 from .config import RunConfig
 from .db import CatalogDB
 from .engines.base import DescribeResult, Engine, RunControl
-from .export import export_csv, export_json
+from .export import duplicate_summary, export_csv, export_duplicates_csv, export_json
 from .hashing import assign_duplicates, hash_file
 from .imaging import UnreadableImage, read_dimensions
 from .scanner import scan_folder
@@ -50,7 +50,7 @@ class CatalogRunner:
     def __init__(
         self,
         config: RunConfig,
-        engine: Engine,
+        engine: Engine | None,
         control: RunControl | None = None,
         on_progress: Callable[[Progress], None] | None = None,
         on_log: Callable[[str], None] | None = None,
@@ -99,6 +99,10 @@ class CatalogRunner:
                 f"{self.db.stats()['ok']} already done."
             )
             self._refresh_counts()
+
+            if cfg.dedupe_only:
+                self._log("Dedupe-only mode: skipping descriptions (no model calls).")
+                return self._finish("done", started)
 
             self._set_phase("describing", f"Describing with {self.engine.name} / {self.engine.model} ...")
             self._describe_phase(pending)
@@ -210,6 +214,7 @@ class CatalogRunner:
                 except queue.Empty:
                     return
                 try:
+                    assert self.engine is not None
                     results = self.engine.describe(batch, self.control)
                 except Exception as e:  # noqa: BLE001
                     fatal = type(e).__name__ == "FatalEngineError"
@@ -238,7 +243,7 @@ class CatalogRunner:
         for r in results:
             if r.status == "error" and r.error == "stopped":
                 continue  # leave pending so the next run picks it up
-            rows.append((r.path, r.status, r.summary, r.error, self.engine.model,
+            rows.append((r.path, r.status, r.summary, r.error, getattr(self.engine, "model", None),
                          r.input_tokens, r.output_tokens, r.cost_usd))
             if r.status == "error":
                 self._log(f"error: {os.path.basename(r.path)}: {r.error}")
@@ -271,6 +276,16 @@ class CatalogRunner:
         n = export_csv(db, self.config.output_csv)
         export_json(db, self.config.output_json)
         self._log(f"Wrote {n} row(s) to {self.config.output_csv} and {self.config.output_json}")
+        d = duplicate_summary(db)
+        with self._lock:
+            self.progress.extra["duplicate_groups"] = d["groups"]
+            self.progress.extra["duplicate_bytes"] = d["bytes"]
+        if d["duplicates"] or self.config.dedupe_only:
+            export_duplicates_csv(db, self.config.output_duplicates_csv)
+            self._log(
+                f"{d['duplicates']} duplicate file(s) in {d['groups']} group(s), "
+                f"{_human_bytes(d['bytes'])} reclaimable; listed in {self.config.output_duplicates_csv}"
+            )
 
     def _finish(self, phase: str, started: float) -> Progress:
         self._set_phase("exporting", "Writing CSV and JSON ...")
@@ -313,3 +328,12 @@ def build_engine(cfg: RunConfig) -> Engine:
         timeout=cfg.request_timeout,
         max_attempts=cfg.max_attempts,
     )
+
+
+def _human_bytes(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{n} B"

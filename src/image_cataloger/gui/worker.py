@@ -21,11 +21,13 @@ class RunWorker(QThread):
         self.runner: CatalogRunner | None = None
 
     def run(self) -> None:  # executes on the worker thread
-        try:
-            engine = build_engine(self.config)
-        except Exception as e:  # noqa: BLE001
-            self.failed.emit(f"Cannot start engine: {e}")
-            return
+        engine = None
+        if not self.config.dedupe_only:
+            try:
+                engine = build_engine(self.config)
+            except Exception as e:  # noqa: BLE001
+                self.failed.emit(f"Cannot start engine: {e}")
+                return
         self.runner = CatalogRunner(
             self.config,
             engine,

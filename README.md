@@ -17,7 +17,7 @@ Runs are **resumable**: everything is written to a SQLite database as it happens
 
 Designed for accuracy first, then cost and speed:
 
-- **Byte-identical duplicates are hashed and described once.** The copies are linked through `duplicate_of` and inherit the summary.
+- **Byte-identical duplicates are hashed and described once.** The copies are linked through `duplicate_of` and inherit the summary. A *Dedupe only* mode does just this step, with no API calls.
 - **Images are downscaled in memory** to at most 1568 px on the long side and re-encoded as JPEG (quality 85) before upload. Claude never uses more than that, so this keeps description quality while cutting image tokens sharply. Source files are never modified.
 - **Several images per request** (default 6). The model must answer with a JSON array of exactly one line per image; if the count does not match, that batch is re-asked one image at a time, so a malformed answer can never shift descriptions onto the wrong files.
 - **Worker pool you control**, exponential backoff on rate limits (429) and overloads (529), a per-request timeout, and per-file error recording, so one bad file or one busy minute never aborts a run.
@@ -62,6 +62,8 @@ image-cataloger
 4. Press **Start**. Watch files done / total, images per minute, ETA, running token and cost figures, and the error count. **Pause** lets in-flight requests finish and holds the rest; **Resume** continues; **Stop** ends the run after in-flight requests and writes the CSV/JSON with everything done so far.
 5. Press **Open CSV** when it finishes.
 
+**Dedupe only.** Tick *Dedupe only* (or pass `--dedupe-only` on the command line) to hash the tree and link byte-identical files without describing anything. Nothing is sent to the model and nothing is deleted. You get the normal CSV/JSON with `duplicate_of` filled in and `status` `pending`, plus `<folder name>_catalog_duplicates.csv` listing each duplicate next to the copy it matches, its size and hash, so you can decide what to remove. Running again later with the box unticked describes the pending files against the same database, so the hashing is not repeated.
+
 Outputs default to `<folder name>_catalog.csv`, `.json` and `.sqlite` next to the chosen folder (or in `~/ImageCataloger` if that location is read-only). **Change…** picks another location. Re-running against the same outputs resumes; files that errored are retried, files already described are skipped, and files that changed on disk are re-hashed and re-described.
 
 ## Run headless
@@ -70,7 +72,7 @@ Outputs default to `<folder name>_catalog.csv`, `.json` and `.sqlite` next to th
 image-cataloger-cli "/Volumes/share/Recovered Photos" --workers 8 --batch-size 6 --model claude-haiku-5-5
 ```
 
-`image-cataloger-cli --help` lists every option (`--no-recursive`, `--engine cli`, `--effort`, `--max-side`, `--csv`, `--json`, `--db`). Ctrl-C stops cleanly and keeps the progress.
+`image-cataloger-cli --help` lists every option (`--dedupe-only`, `--no-recursive`, `--engine cli`, `--effort`, `--max-side`, `--csv`, `--json`, `--db`). Ctrl-C stops cleanly and keeps the progress.
 
 ## What it costs
 

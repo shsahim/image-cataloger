@@ -29,6 +29,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("folder", help="folder to catalog (local path or mounted share)")
     ap.add_argument("--no-recursive", action="store_true", help="only the top-level folder")
+    ap.add_argument("--dedupe-only", action="store_true",
+                    help="hash files and link byte-identical duplicates, then export; no model calls")
     ap.add_argument("--workers", type=int, default=4, help="parallel requests (default 4)")
     ap.add_argument("--batch-size", type=int, default=6, help="images per request (default 6)")
     ap.add_argument("--engine", choices=["api", "cli"], default="api",
@@ -65,9 +67,10 @@ def main(argv: list[str] | None = None) -> int:
         db_path=args.db,
         output_csv=args.csv,
         output_json=args.json,
-        api_key=get_api_key() if args.engine == "api" else None,
+        dedupe_only=args.dedupe_only,
+        api_key=get_api_key() if args.engine == "api" and not args.dedupe_only else None,
     )
-    if cfg.engine == "api" and not cfg.api_key:
+    if cfg.engine == "api" and not cfg.dedupe_only and not cfg.api_key:
         print("No API key. Set ANTHROPIC_API_KEY or store one from the GUI settings dialog.",
               file=sys.stderr)
         return 2
@@ -91,11 +94,13 @@ def main(argv: list[str] | None = None) -> int:
     def on_log(s: str) -> None:
         sys.stderr.write("\n" + s + "\n")
 
-    try:
-        engine = build_engine(cfg)
-    except Exception as e:  # noqa: BLE001
-        print(f"Cannot start engine: {e}", file=sys.stderr)
-        return 2
+    engine = None
+    if not cfg.dedupe_only:
+        try:
+            engine = build_engine(cfg)
+        except Exception as e:  # noqa: BLE001
+            print(f"Cannot start engine: {e}", file=sys.stderr)
+            return 2
     runner = CatalogRunner(cfg, engine, control, on_progress, on_log)
     result = runner.run()
     sys.stderr.write("\n")
@@ -103,6 +108,8 @@ def main(argv: list[str] | None = None) -> int:
           f"{result.unreadable} unreadable, {result.errors} errors, {result.pending} pending. "
           f"Tokens in/out {result.input_tokens}/{result.output_tokens}, est. ${result.cost_usd:.4f}.")
     print(f"CSV: {cfg.output_csv}\nJSON: {cfg.output_json}\nDB: {cfg.db_path}")
+    if result.duplicates:
+        print(f"Duplicates: {cfg.output_duplicates_csv}")
     return 0 if result.phase == "done" and not runner.fatal_error else 1
 
 

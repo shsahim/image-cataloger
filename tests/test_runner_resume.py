@@ -57,7 +57,7 @@ def _folder(tmp_path, make_image, n=5):
 
 def test_full_run_with_duplicates_and_unreadable(tmp_path, make_image):
     folder, paths = _folder(tmp_path, make_image, 4)
-    dup_path = str(folder / "aaa_copy_of_img0.png")  # byte-identical duplicate; sorts first
+    dup_path = str(folder / "img0 copy.png")  # byte-identical duplicate; longer name loses
     shutil.copy(paths[0], dup_path)
     (folder / "broken.jpg").write_bytes(b"not an image")
     (folder / "notes.txt").write_text("ignored")
@@ -68,14 +68,13 @@ def test_full_run_with_duplicates_and_unreadable(tmp_path, make_image):
     assert result.phase == "done"
     assert result.total == 6 and result.ok == 4 and result.duplicates == 1 and result.unreadable == 1
     described = sorted(p for call in engine.calls for p in call)
-    # the canonical copy is the first path in sort order; its twin and the broken file were never sent
-    assert described == sorted([dup_path] + paths[1:])
+    assert described == sorted(paths)  # the duplicate and the broken file were never sent
 
     rows = {r["path"]: r for r in csv.DictReader(open(cfg.output_csv))}
     assert len(rows) == 6
-    dup = rows[str(folder / "img0.png")]
-    assert dup["status"] == "duplicate" and dup["duplicate_of"] == dup_path
-    assert dup["summary"] == rows[dup_path]["summary"] == "desc of aaa_copy_of_img0.png"
+    dup = rows[dup_path]
+    assert dup["status"] == "duplicate" and dup["duplicate_of"] == str(folder / "img0.png")
+    assert dup["summary"] == rows[str(folder / "img0.png")]["summary"] == "desc of img0.png"
     assert rows[str(folder / "broken.jpg")]["status"] == "unreadable"
     assert rows[str(folder / "img1.png")]["width"] == "21"
     assert rows[str(folder / "img1.png")]["sha256"]
@@ -155,3 +154,30 @@ def test_deleted_files_drop_out_of_catalog(tmp_path, make_image):
     os.remove(paths[2])
     r = CatalogRunner(cfg, FakeEngine(), RunControl()).run()
     assert r.total == 2
+
+
+def test_dedupe_only_never_calls_engine_and_writes_duplicates_csv(tmp_path, make_image):
+    folder, paths = _folder(tmp_path, make_image, 3)
+    shutil.copy(paths[1], folder / "zz_copy1.png")
+    shutil.copy(paths[1], folder / "zz_copy2.png")
+    cfg = _cfg(tmp_path, folder, dedupe_only=True)
+    engine = FakeEngine()
+    r = CatalogRunner(cfg, engine, RunControl()).run()
+    assert r.phase == "done" and engine.calls == []
+    assert r.total == 5 and r.duplicates == 2 and r.pending == 3 and r.ok == 0
+    assert r.extra["duplicate_groups"] == 1
+    rows = list(csv.DictReader(open(cfg.output_csv)))
+    assert sum(x["status"] == "pending" for x in rows) == 3
+    dup_rows = list(csv.DictReader(open(cfg.output_duplicates_csv)))
+    assert [d["duplicate"] for d in dup_rows] == [str(folder / "zz_copy1.png"), str(folder / "zz_copy2.png")]
+    assert all(d["canonical"] == paths[1] for d in dup_rows)
+    assert r.extra["duplicate_bytes"] == 2 * (folder / "zz_copy1.png").stat().st_size
+
+    # dedupe-only works with no engine at all, and a later full run describes only pending files
+    r2 = CatalogRunner(_cfg(tmp_path, folder, dedupe_only=True), None, RunControl()).run()
+    assert r2.phase == "done" and r2.duplicates == 2
+    engine3 = FakeEngine()
+    r3 = CatalogRunner(_cfg(tmp_path, folder), engine3, RunControl()).run()
+    assert r3.ok == 3 and sorted(p for c in engine3.calls for p in c) == sorted(paths)
+    dup_rows = list(csv.DictReader(open(cfg.output_duplicates_csv)))
+    assert all(d["summary"] == "desc of img1.png" for d in dup_rows)

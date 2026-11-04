@@ -73,3 +73,50 @@ def export_json(db: CatalogDB, path: str) -> int:
     rows = rows_for_export(db)
     _atomic_write(path, lambda f: json.dump(rows, f, indent=1, ensure_ascii=False))
     return len(rows)
+
+
+DUPLICATE_COLUMNS = ["canonical", "duplicate", "bytes", "sha256", "summary"]
+
+
+def duplicate_groups(db: CatalogDB) -> list[dict]:
+    """Rows for the duplicates-only CSV: one per duplicate file, grouped by canonical."""
+    rows = db.all_rows()
+    by_path: dict[str, sqlite3.Row] = {r["path"]: r for r in rows}
+    out: list[dict] = []
+    for r in rows:
+        if r["status"] != "duplicate" or not r["duplicate_of"]:
+            continue
+        canon = by_path.get(r["duplicate_of"])
+        out.append(
+            {
+                "canonical": r["duplicate_of"],
+                "duplicate": r["path"],
+                "bytes": r["size"],
+                "sha256": r["sha256"],
+                "summary": (canon["summary"] if canon is not None else None) or "",
+            }
+        )
+    out.sort(key=lambda d: (d["canonical"], d["duplicate"]))
+    return out
+
+
+def export_duplicates_csv(db: CatalogDB, path: str) -> int:
+    rows = duplicate_groups(db)
+
+    def write(f):
+        w = csv.DictWriter(f, fieldnames=DUPLICATE_COLUMNS)
+        w.writeheader()
+        w.writerows(rows)
+
+    _atomic_write(path, write)
+    return len(rows)
+
+
+def duplicate_summary(db: CatalogDB) -> dict:
+    """Counts for the log: duplicate files, groups they belong to, and reclaimable bytes."""
+    rows = duplicate_groups(db)
+    return {
+        "duplicates": len(rows),
+        "groups": len({r["canonical"] for r in rows}),
+        "bytes": sum(int(r["bytes"] or 0) for r in rows),
+    }

@@ -59,6 +59,10 @@ class MainWindow(QMainWindow):
         self.recursive_cb = QCheckBox("Include subfolders")
         self.recursive_cb.setChecked(self.settings.value("recursive", True, type=bool))
         src.addRow("", self.recursive_cb)
+        self.dedupe_cb = QCheckBox("Dedupe only (hash and link duplicates; no descriptions, no API cost)")
+        self.dedupe_cb.setChecked(self.settings.value("dedupe_only", False, type=bool))
+        self.dedupe_cb.toggled.connect(self._engine_changed)
+        src.addRow("", self.dedupe_cb)
         self.output_label = QLabel("")
         self.output_label.setWordWrap(True)
         self.output_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -200,8 +204,11 @@ class MainWindow(QMainWindow):
             saved = self.settings.value("model_cli", "haiku")
         idx = self.model_combo.findData(saved)
         self.model_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        dedupe = self.dedupe_cb.isChecked()
         for w in (self.max_side_spin, self.effort_combo):
-            w.setEnabled(engine == "api")
+            w.setEnabled(engine == "api" and not dedupe)
+        for w in (self.engine_combo, self.model_combo, self.workers_spin, self.batch_spin):
+            w.setEnabled(not dedupe)
         self._refresh_key_label()
 
     def _refresh_key_label(self) -> None:
@@ -255,12 +262,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Folder", "Choose an existing folder first.")
             return None
         engine = self.engine_combo.currentData()
-        api_key = get_api_key() if engine == "api" else None
-        if engine == "api" and not api_key:
+        dedupe_only = self.dedupe_cb.isChecked()
+        api_key = get_api_key() if engine == "api" and not dedupe_only else None
+        if engine == "api" and not dedupe_only and not api_key:
             QMessageBox.warning(self, "API key", "No API key found. Click 'API key…' to add one, "
                                                  "or switch to the Local Claude Code CLI engine.")
             return None
-        if engine == "cli" and not find_claude_cli():
+        if engine == "cli" and not dedupe_only and not find_claude_cli():
             QMessageBox.warning(self, "Claude CLI", "The 'claude' command was not found on PATH.")
             return None
         if not self.output_base:
@@ -277,11 +285,14 @@ class MainWindow(QMainWindow):
             db_path=self.output_base + ".sqlite",
             output_csv=self.output_base + ".csv",
             output_json=self.output_base + ".json",
+            output_duplicates_csv=self.output_base + "_duplicates.csv",
+            dedupe_only=dedupe_only,
             api_key=api_key,
         )
         s = self.settings
         s.setValue("folder", folder)
         s.setValue("recursive", cfg.recursive)
+        s.setValue("dedupe_only", cfg.dedupe_only)
         s.setValue("workers", cfg.workers)
         s.setValue("batch_size", cfg.batch_size)
         s.setValue("engine", engine)
@@ -298,8 +309,8 @@ class MainWindow(QMainWindow):
             return
         self.last_config = cfg
         self.log_view.clear()
-        self.append_log(f"Starting: {cfg.folder}  engine={cfg.engine} model={cfg.model} "
-                        f"threads={cfg.workers} batch={cfg.batch_size}")
+        mode = "dedupe only" if cfg.dedupe_only else f"engine={cfg.engine} model={cfg.model}"
+        self.append_log(f"Starting: {cfg.folder}  {mode} threads={cfg.workers} batch={cfg.batch_size}")
         self.worker = RunWorker(cfg)
         self.worker.progress.connect(self.on_progress)
         self.worker.log.connect(self.append_log)
@@ -337,7 +348,7 @@ class MainWindow(QMainWindow):
         self.pause_btn.setChecked(False)
         self.pause_btn.setText("Pause")
         self.stop_btn.setEnabled(running)
-        for w in (self.folder_edit, self.recursive_cb, self.engine_combo, self.model_combo,
+        for w in (self.folder_edit, self.recursive_cb, self.dedupe_cb, self.engine_combo, self.model_combo,
                   self.workers_spin, self.batch_spin, self.max_side_spin, self.effort_combo, self.out_btn):
             w.setEnabled(not running)
         if not running:
@@ -377,9 +388,12 @@ class MainWindow(QMainWindow):
         self.tick.stop()
         self._set_running(False)
         self.open_btn.setEnabled(bool(self.last_config and os.path.exists(self.last_config.output_csv)))
+        groups = p.extra.get("duplicate_groups", 0)
+        mb = p.extra.get("duplicate_bytes", 0) / 1_048_576
         self.phase_label.setText(
-            f"{p.phase.capitalize()}: {p.ok} described, {p.duplicates} duplicates, "
-            f"{p.unreadable} unreadable, {p.errors} errors, {p.pending} pending. Est. ${p.cost_usd:.4f}"
+            f"{p.phase.capitalize()}: {p.ok} described, {p.duplicates} duplicates in {groups} groups "
+            f"({mb:.1f} MB reclaimable), {p.unreadable} unreadable, {p.errors} errors, "
+            f"{p.pending} pending. Est. ${p.cost_usd:.4f}"
         )
 
     def open_csv(self) -> None:

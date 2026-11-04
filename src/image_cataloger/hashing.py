@@ -27,8 +27,9 @@ def assign_duplicates(
 
     *items* is an iterable of (path, sha256). Within a group of identical hashes the
     canonical file is the first one listed in *preferred* (e.g. files already
-    described in an earlier run), otherwise the lexicographically smallest path, so
-    the choice is stable across runs. Items with a None hash are never grouped.
+    described in an earlier run), otherwise the one with the shortest file name and
+    then the lexicographically smallest path ("IMG_1.jpg" beats "IMG_1 copy.jpg"),
+    so the choice is stable across runs. Items with a None hash are never grouped.
     """
     preferred_set = set(preferred)
     groups: dict[str, list[str]] = {}
@@ -40,7 +41,7 @@ def assign_duplicates(
     for paths in groups.values():
         if len(paths) < 2:
             continue
-        ordered = sorted(paths)
+        ordered = sorted(paths, key=lambda p: (len(os.path.basename(p)), p))
         canonical = next((p for p in ordered if p in preferred_set), ordered[0])
         for p in ordered:
             if p != canonical:

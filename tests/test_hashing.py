@@ -35,3 +35,10 @@ def test_assign_duplicates_prefers_already_described_file():
 def test_none_hashes_never_group():
     m = assign_duplicates([("/a", None), ("/b", None)])
     assert m == {"/a": None, "/b": None}
+
+
+def test_assign_duplicates_prefers_shortest_name():
+    items = [("/x/IMG_1 copy.jpg", "h"), ("/x/IMG_1.jpg", "h"), ("/x/a_IMG_1.jpg", "h")]
+    m = assign_duplicates(items)
+    assert m["/x/IMG_1.jpg"] is None
+    assert m["/x/IMG_1 copy.jpg"] == "/x/IMG_1.jpg" and m["/x/a_IMG_1.jpg"] == "/x/IMG_1.jpg"

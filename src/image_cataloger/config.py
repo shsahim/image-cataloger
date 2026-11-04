@@ -72,6 +72,8 @@ class RunConfig:
     db_path: str = ""
     output_csv: str = ""
     output_json: str = ""
+    output_duplicates_csv: str = ""
+    dedupe_only: bool = False  # hash, link duplicates, export; never call the model
     api_key: str | None = None
     request_timeout: float = 120.0
     max_attempts: int = 8
@@ -85,3 +87,5 @@ class RunConfig:
             self.output_csv = str(base.with_suffix(".csv"))
         if not self.output_json:
             self.output_json = str(base.with_suffix(".json"))
+        if not self.output_duplicates_csv:
+            self.output_duplicates_csv = str(base.parent / f"{base.name}_duplicates.csv")
