@@ -30,7 +30,7 @@ Requires Python 3.11 or newer.
 > **macOS note:** put the project and its virtual environment on a path containing only plain ASCII characters (for example `~/Projects/image-cataloger`). Qt, the GUI toolkit, cannot load its platform plugins from a folder whose name contains characters such as a curly apostrophe (`Spencer’s MacBook Pro`). The app detects this and tells you.
 
 ```bash
-git clone https://github.com/<you>/image-cataloger.git ~/Projects/image-cataloger
+git clone git@github.com:shsahim/image-cataloger.git ~/Projects/image-cataloger
 cd ~/Projects/image-cataloger
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
