@@ -69,32 +69,46 @@ def prepare_image(
     """
     try:
         with Image.open(path) as im:
-            im.load()  # force full decode so truncated files fail here, not later
-            source_w, source_h = im.width, im.height
-            im = ImageOps.exif_transpose(im) or im
-            if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
-                rgba = im.convert("RGBA")
-                background = Image.new("RGB", rgba.size, (255, 255, 255))
-                background.paste(rgba, mask=rgba.getchannel("A"))
-                im = background
-            elif im.mode != "RGB":
-                im = im.convert("RGB")
-            longest = max(im.width, im.height)
-            if longest > max_side:
-                scale = max_side / longest
-                new_size = (max(1, round(im.width * scale)), max(1, round(im.height * scale)))
-                im = im.resize(new_size, Image.Resampling.LANCZOS)
-            buf = io.BytesIO()
-            im.save(buf, format="JPEG", quality=quality, optimize=True)
-            return PreparedImage(
-                data=buf.getvalue(),
-                media_type="image/jpeg",
-                width=im.width,
-                height=im.height,
-                source_width=source_w,
-                source_height=source_h,
-            )
+            return _encode(im, max_side, quality)
     except UnreadableImage:
         raise
     except (UnidentifiedImageError, OSError, ValueError, SyntaxError, Image.DecompressionBombError) as e:
         raise UnreadableImage(f"{type(e).__name__}: {e}") from e
+
+
+def prepare_image_bytes(data: bytes, max_side: int = DEFAULT_MAX_SIDE,
+                        quality: int = DEFAULT_JPEG_QUALITY) -> PreparedImage:
+    """Same as prepare_image, for an encoded image already in memory (e.g. a video frame)."""
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            return _encode(im, max_side, quality)
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError, Image.DecompressionBombError) as e:
+        raise UnreadableImage(f"{type(e).__name__}: {e}") from e
+
+
+def _encode(im: Image.Image, max_side: int, quality: int) -> PreparedImage:
+    im.load()  # force full decode so truncated files fail here, not later
+    source_w, source_h = im.width, im.height
+    im = ImageOps.exif_transpose(im) or im
+    if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+        rgba = im.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        im = background
+    elif im.mode != "RGB":
+        im = im.convert("RGB")
+    longest = max(im.width, im.height)
+    if longest > max_side:
+        scale = max_side / longest
+        new_size = (max(1, round(im.width * scale)), max(1, round(im.height * scale)))
+        im = im.resize(new_size, Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=quality, optimize=True)
+    return PreparedImage(
+        data=buf.getvalue(),
+        media_type="image/jpeg",
+        width=im.width,
+        height=im.height,
+        source_width=source_w,
+        source_height=source_h,
+    )

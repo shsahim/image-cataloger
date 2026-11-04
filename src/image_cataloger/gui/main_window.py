@@ -59,6 +59,11 @@ class MainWindow(QMainWindow):
         self.recursive_cb = QCheckBox("Include subfolders")
         self.recursive_cb.setChecked(self.settings.value("recursive", True, type=bool))
         src.addRow("", self.recursive_cb)
+        self.videos_cb = QCheckBox("Include videos (mp4, mov, avi, mkv, webm, …)")
+        self.videos_cb.setChecked(self.settings.value("include_videos", True, type=bool))
+        self.videos_cb.setToolTip("Videos are hashed for duplicates and, with the API engine, described "
+                                  "from a few frames sampled evenly through the clip.")
+        src.addRow("", self.videos_cb)
         self.dedupe_cb = QCheckBox("Dedupe only (hash and link duplicates; no descriptions, no API cost)")
         self.dedupe_cb.setChecked(self.settings.value("dedupe_only", False, type=bool))
         self.dedupe_cb.toggled.connect(self._engine_changed)
@@ -118,6 +123,13 @@ class MainWindow(QMainWindow):
         eng.addWidget(QLabel("Effort:"), 3, 2)
         eng.addWidget(self.effort_combo, 3, 3)
 
+        self.frames_spin = QSpinBox()
+        self.frames_spin.setRange(1, 20)
+        self.frames_spin.setValue(self.settings.value("video_frames", 5, type=int))
+        self.frames_spin.setToolTip("Frames sampled per video. Each frame costs about as much as one image.")
+        eng.addWidget(QLabel("Frames per video:"), 4, 0)
+        eng.addWidget(self.frames_spin, 4, 1)
+
         key_row = QHBoxLayout()
         self.key_label = QLabel("")
         key_row.addWidget(self.key_label)
@@ -125,7 +137,7 @@ class MainWindow(QMainWindow):
         key_btn.clicked.connect(self.open_settings)
         key_row.addWidget(key_btn)
         key_row.addStretch()
-        eng.addLayout(key_row, 4, 0, 1, 4)
+        eng.addLayout(key_row, 5, 0, 1, 4)
         root.addWidget(eng_box)
 
         # ---- controls ------------------------------------------------------
@@ -205,7 +217,7 @@ class MainWindow(QMainWindow):
         idx = self.model_combo.findData(saved)
         self.model_combo.setCurrentIndex(idx if idx >= 0 else 0)
         dedupe = self.dedupe_cb.isChecked()
-        for w in (self.max_side_spin, self.effort_combo):
+        for w in (self.max_side_spin, self.effort_combo, self.frames_spin):
             w.setEnabled(engine == "api" and not dedupe)
         for w in (self.engine_combo, self.model_combo, self.workers_spin, self.batch_spin):
             w.setEnabled(not dedupe)
@@ -287,12 +299,16 @@ class MainWindow(QMainWindow):
             output_json=self.output_base + ".json",
             output_duplicates_csv=self.output_base + "_duplicates.csv",
             dedupe_only=dedupe_only,
+            include_videos=self.videos_cb.isChecked(),
+            video_frames=self.frames_spin.value(),
             api_key=api_key,
         )
         s = self.settings
         s.setValue("folder", folder)
         s.setValue("recursive", cfg.recursive)
         s.setValue("dedupe_only", cfg.dedupe_only)
+        s.setValue("include_videos", cfg.include_videos)
+        s.setValue("video_frames", cfg.video_frames)
         s.setValue("workers", cfg.workers)
         s.setValue("batch_size", cfg.batch_size)
         s.setValue("engine", engine)
@@ -348,8 +364,9 @@ class MainWindow(QMainWindow):
         self.pause_btn.setChecked(False)
         self.pause_btn.setText("Pause")
         self.stop_btn.setEnabled(running)
-        for w in (self.folder_edit, self.recursive_cb, self.dedupe_cb, self.engine_combo, self.model_combo,
-                  self.workers_spin, self.batch_spin, self.max_side_spin, self.effort_combo, self.out_btn):
+        for w in (self.folder_edit, self.recursive_cb, self.videos_cb, self.dedupe_cb, self.engine_combo,
+                  self.model_combo, self.workers_spin, self.batch_spin, self.max_side_spin,
+                  self.effort_combo, self.frames_spin, self.out_btn):
             w.setEnabled(not running)
         if not running:
             self._engine_changed()

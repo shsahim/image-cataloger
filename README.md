@@ -5,8 +5,10 @@ A desktop app (and command-line tool) that writes a one-line description of **ev
 | column | meaning |
 |---|---|
 | `path` | absolute path of the file |
-| `summary` | one factual line (under ~20 words): subject, setting, legible text, screenshot vs photo |
+| `kind` | `image` or `video` |
+| `summary` | one factual line (under ~20 words): subject, setting, legible text, screenshot vs photo; videos start with `Video, 12s:` |
 | `width`, `height`, `bytes` | original pixel size and file size |
+| `duration_s` | video length in seconds (empty for images) |
 | `md5`, `sha256` | content hashes |
 | `duplicate_of` | for byte-identical files, the path of the copy that was described |
 | `status` | `ok`, `duplicate`, `unreadable`, `error`, or `pending` (not done yet) |
@@ -22,6 +24,7 @@ Designed for accuracy first, then cost and speed:
 - **Several images per request** (default 6). The model must answer with a JSON array of exactly one line per image; if the count does not match, that batch is re-asked one image at a time, so a malformed answer can never shift descriptions onto the wrong files.
 - **Worker pool you control**, exponential backoff on rate limits (429) and overloads (529), a per-request timeout, and per-file error recording, so one bad file or one busy minute never aborts a run.
 - Files Pillow cannot decode are flagged `unreadable` rather than crashing.
+- **Videos** (mp4, mov, m4v, avi, mkv, webm, mpg, wmv, 3gp, mts, flv) are hashed and deduplicated like images. For descriptions, a few frames (5 by default) are sampled evenly through the clip with ffmpeg and sent as one request; the answer is one line for the whole video, prefixed with its length. ffmpeg comes bundled through `imageio-ffmpeg`, so nothing extra to install; a system ffmpeg is used when present.
 
 ## Install
 
@@ -56,7 +59,7 @@ image-cataloger
 
 (or `python -m image_cataloger`). Then:
 
-1. **Browse…** to the folder. Network shares mounted under `/Volumes/...` (macOS) or a mapped drive (Windows) work like any other folder. Tick *Include subfolders* for a recursive scan.
+1. **Browse…** to the folder. Network shares mounted under `/Volumes/...` (macOS) or a mapped drive (Windows) work like any other folder. Tick *Include subfolders* for a recursive scan and *Include videos* to catalog video files too (*Frames per video* sets how many frames are sampled per clip; the Local CLI engine cannot describe videos).
 2. Pick the engine and model. `claude-haiku-5-5` is the default: fast and very cheap. `claude-sonnet-5-5` reads fine detail and small text better; `claude-opus-5-5` is the most accurate and the most expensive.
 3. Set **Threads** (parallel requests). Start at 4 to 8; raise it until the log starts showing rate-limit retries, then back off a little.
 4. Press **Start**. Watch files done / total, images per minute, ETA, running token and cost figures, and the error count. **Pause** lets in-flight requests finish and holds the rest; **Resume** continues; **Stop** ends the run after in-flight requests and writes the CSV/JSON with everything done so far.
@@ -72,7 +75,7 @@ Outputs default to `<folder name>_catalog.csv`, `.json` and `.sqlite` next to th
 image-cataloger-cli "/Volumes/share/Recovered Photos" --workers 8 --batch-size 6 --model claude-haiku-5-5
 ```
 
-`image-cataloger-cli --help` lists every option (`--dedupe-only`, `--no-recursive`, `--engine cli`, `--effort`, `--max-side`, `--csv`, `--json`, `--db`). Ctrl-C stops cleanly and keeps the progress.
+`image-cataloger-cli --help` lists every option (`--dedupe-only`, `--no-videos`, `--video-frames`, `--no-recursive`, `--engine cli`, `--effort`, `--max-side`, `--csv`, `--json`, `--db`). Ctrl-C stops cleanly and keeps the progress.
 
 ## What it costs
 
@@ -86,7 +89,7 @@ A photo downscaled to 1568 px on its long side costs about 2,500 image tokens at
 | `claude-sonnet-5-5` | about $6 |
 | `claude-opus-5-5` | about $12 |
 
-These are upper-bound estimates for large photos; screenshots and small images cost proportionally less. The GUI shows the actual running cost computed from the token counts the API reports. The *Effort* setting (`low` by default) controls how much the model thinks before answering; `low` is right for captions.
+These are upper-bound estimates for large photos; screenshots and small images cost proportionally less. A video costs about as much as the number of frames sampled from it (5 frames ≈ 5 images). The GUI shows the actual running cost computed from the token counts the API reports. The *Effort* setting (`low` by default) controls how much the model thinks before answering; `low` is right for captions.
 
 Throughput scales with the thread count. One request of 6 images takes a few seconds on Haiku, so 8 threads sustains several hundred images per minute until you hit your account's rate limit.
 
@@ -114,7 +117,7 @@ The engine lives in `src/image_cataloger/` (`scanner`, `hashing`, `imaging`, `db
 pytest
 ```
 
-The tests cover hashing and duplicate detection, downscaling (orientation, transparency, truncated files), response parsing, the API engine's retry / mismatch / refusal handling against a mocked client, and resume behaviour of the runner (stop, re-run, errors retried, changed files re-described).
+The tests cover hashing and duplicate detection, downscaling (orientation, transparency, truncated files), video probing and frame sampling on an ffmpeg-generated clip, response parsing, the API engine's retry / mismatch / refusal handling against a mocked client, and resume behaviour of the runner (stop, re-run, errors retried, changed files re-described).
 
 ## License
 

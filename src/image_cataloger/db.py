@@ -22,8 +22,10 @@ STATUSES = ("pending", "ok", "duplicate", "unreadable", "error")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS files (
     path          TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL DEFAULT 'image',
     size          INTEGER,
     mtime         REAL,
+    duration      REAL,
     md5           TEXT,
     sha256        TEXT,
     width         INTEGER,
@@ -60,7 +62,16 @@ class CatalogDB:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.executescript(SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after the first release to databases created before them."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(files)")}
+        if "kind" not in cols:
+            self._conn.execute("ALTER TABLE files ADD COLUMN kind TEXT NOT NULL DEFAULT 'image'")
+        if "duration" not in cols:
+            self._conn.execute("ALTER TABLE files ADD COLUMN duration REAL")
 
     def close(self) -> None:
         with self._lock:
@@ -108,19 +119,23 @@ class CatalogDB:
         height: int | None,
         status: str,
         error: str | None = None,
+        kind: str = "image",
+        duration: float | None = None,
     ) -> None:
         """Insert a freshly hashed file, or reset a row whose file changed on disk."""
         with self._lock:
             self._conn.execute(
-                """INSERT INTO files(path,size,mtime,md5,sha256,width,height,status,error,
+                """INSERT INTO files(path,kind,size,mtime,duration,md5,sha256,width,height,status,error,
                                      summary,duplicate_of,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,?)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?)
                    ON CONFLICT(path) DO UPDATE SET
-                     size=excluded.size, mtime=excluded.mtime, md5=excluded.md5,
+                     kind=excluded.kind, size=excluded.size, mtime=excluded.mtime,
+                     duration=excluded.duration, md5=excluded.md5,
                      sha256=excluded.sha256, width=excluded.width, height=excluded.height,
                      status=excluded.status, error=excluded.error, summary=NULL,
                      duplicate_of=NULL, updated_at=excluded.updated_at""",
-                (path, size, mtime, md5, sha256, width, height, status, error, time.time()),
+                (path, kind, size, mtime, duration, md5, sha256, width, height, status, error,
+                 time.time()),
             )
             self._conn.commit()
 

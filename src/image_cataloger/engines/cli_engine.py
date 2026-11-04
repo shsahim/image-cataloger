@@ -14,6 +14,7 @@ import subprocess
 
 from ..imaging import UnreadableImage, read_dimensions
 from ..parsing import parse_tab_lines
+from ..scanner import is_video_file
 from .base import DescribeResult, RunControl
 
 log = logging.getLogger(__name__)
@@ -59,6 +60,10 @@ class CliEngine:
         results: dict[str, DescribeResult] = {}
         readable: list[str] = []
         for p in paths:
+            if is_video_file(p):
+                results[p] = DescribeResult(p, status="error",
+                                            error="videos need the Claude API engine (frame sampling)")
+                continue
             try:
                 read_dimensions(p)
                 readable.append(p)

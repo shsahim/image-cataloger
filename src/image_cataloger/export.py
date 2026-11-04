@@ -10,7 +10,7 @@ import tempfile
 from .db import CatalogDB
 
 COLUMNS = [
-    "path", "summary", "width", "height", "bytes", "md5", "sha256",
+    "path", "kind", "summary", "width", "height", "duration_s", "bytes", "md5", "sha256",
     "duplicate_of", "status", "error", "model",
 ]
 
@@ -26,9 +26,11 @@ def rows_for_export(db: CatalogDB) -> list[dict]:
         out.append(
             {
                 "path": r["path"],
+                "kind": r["kind"] or "image",
                 "summary": summary or "",
                 "width": r["width"],
                 "height": r["height"],
+                "duration_s": (round(r["duration"], 2) if r["duration"] is not None else None),
                 "bytes": r["size"],
                 "md5": r["md5"],
                 "sha256": r["sha256"],

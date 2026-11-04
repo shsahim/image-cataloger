@@ -20,7 +20,8 @@ from .engines.base import DescribeResult, Engine, RunControl
 from .export import duplicate_summary, export_csv, export_duplicates_csv, export_json
 from .hashing import assign_duplicates, hash_file
 from .imaging import UnreadableImage, read_dimensions
-from .scanner import scan_folder
+from .scanner import is_video_file, scan_folder
+from .video import VideoError, find_ffmpeg, probe_video
 
 log = logging.getLogger(__name__)
 
@@ -75,8 +76,11 @@ class CatalogRunner:
         started = time.time()
         try:
             self._set_phase("scanning", f"Scanning {cfg.folder} ...")
-            paths = scan_folder(cfg.folder, cfg.recursive)
-            self._log(f"Found {len(paths)} image file(s).")
+            paths = scan_folder(cfg.folder, cfg.recursive, include_videos=cfg.include_videos)
+            n_video = sum(1 for p in paths if is_video_file(p))
+            self._log(f"Found {len(paths)} file(s): {len(paths) - n_video} image(s), {n_video} video(s).")
+            if n_video and not find_ffmpeg():
+                self._log("WARNING: ffmpeg not found; videos will be hashed but not described.")
             removed = self.db.delete_missing(paths)
             if removed:
                 self._log(f"Dropped {removed} row(s) for files no longer present.")
@@ -158,11 +162,24 @@ class CatalogRunner:
             except OSError as e:
                 db.upsert_hashed(p, 0, 0.0, "", "", None, None, "error", f"read failed: {e}")
                 return
-            try:
-                w, h = read_dimensions(p)
-                db.upsert_hashed(p, st.st_size, st.st_mtime, md5, sha, w, h, "pending")
-            except UnreadableImage as e:
-                db.upsert_hashed(p, st.st_size, st.st_mtime, md5, sha, None, None, "unreadable", str(e))
+            if is_video_file(p):
+                try:
+                    info = probe_video(p)
+                    db.upsert_hashed(p, st.st_size, st.st_mtime, md5, sha, info.width, info.height,
+                                     "pending", kind="video", duration=info.duration)
+                except VideoError as e:
+                    # No ffmpeg, or a broken container: keep it pending if the tool is missing
+                    # (a later run with ffmpeg will describe it), unreadable if the file is bad.
+                    missing = "not found" in str(e)
+                    db.upsert_hashed(p, st.st_size, st.st_mtime, md5, sha, None, None,
+                                     "pending" if missing else "unreadable",
+                                     None if missing else str(e), kind="video")
+            else:
+                try:
+                    w, h = read_dimensions(p)
+                    db.upsert_hashed(p, st.st_size, st.st_mtime, md5, sha, w, h, "pending")
+                except UnreadableImage as e:
+                    db.upsert_hashed(p, st.st_size, st.st_mtime, md5, sha, None, None, "unreadable", str(e))
             with self._lock:
                 self.progress.extra["hashed"] += 1
                 n = self.progress.extra["hashed"]
@@ -327,6 +344,7 @@ def build_engine(cfg: RunConfig) -> Engine:
         effort=cfg.effort,
         timeout=cfg.request_timeout,
         max_attempts=cfg.max_attempts,
+        video_frames=cfg.video_frames,
     )
 
 

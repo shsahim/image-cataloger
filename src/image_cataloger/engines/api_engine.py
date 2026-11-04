@@ -16,6 +16,8 @@ import anthropic
 from ..imaging import PreparedImage, UnreadableImage, prepare_image
 from ..parsing import parse_summaries
 from ..pricing import cost_usd
+from ..scanner import is_video_file
+from ..video import VideoError, probe_video, sample_frames
 from .base import DescribeResult, RunControl
 
 log = logging.getLogger(__name__)
@@ -26,7 +28,8 @@ SYSTEM_PROMPT = (
     "the setting, any clearly legible text (quote it briefly), and the kind of image when it "
     "is not an ordinary photo (screenshot, scan, document, drawing, logo, graphic, meme, "
     "blank, corrupted). State only what is visible. Do not guess who people are, do not add "
-    "opinions, and do not mention that you are describing an image."
+    "opinions, and do not mention that you are describing an image. When given several frames "
+    "sampled from one video, write one line describing the video as a whole."
 )
 
 
@@ -47,12 +50,14 @@ class ApiEngine:
         timeout: float = 120.0,
         max_attempts: int = 8,
         client: anthropic.Anthropic | None = None,
+        video_frames: int = 5,
     ) -> None:
         self.model = model
         self.max_side = max_side
         self.jpeg_quality = jpeg_quality
         self.effort = effort
         self.max_attempts = max_attempts
+        self.video_frames = video_frames
         # Our own backoff loop handles 429/529, so keep the SDK's retries minimal.
         self.client = client or anthropic.Anthropic(api_key=api_key, timeout=timeout, max_retries=1)
 
@@ -61,6 +66,10 @@ class ApiEngine:
         prepared: list[tuple[str, PreparedImage]] = []
         results: dict[str, DescribeResult] = {}
         for p in paths:
+            if is_video_file(p):
+                if not control.stopped:
+                    results[p] = self._describe_video(p, control)
+                continue
             try:
                 prepared.append((p, prepare_image(p, self.max_side, self.jpeg_quality)))
             except UnreadableImage as e:
@@ -71,6 +80,38 @@ class ApiEngine:
         return [results.get(p) or DescribeResult(p, status="error", error="stopped") for p in paths]
 
     # ---- internals --------------------------------------------------------
+    def _describe_video(self, path: str, control: RunControl) -> DescribeResult:
+        """One request per video: N evenly spaced frames, one line back."""
+        try:
+            info = probe_video(path)
+            frames = sample_frames(path, self.video_frames, self.max_side, self.jpeg_quality,
+                                   duration=info.duration)
+        except VideoError as e:
+            status = "error" if "not found" in str(e) or "timed out" in str(e) else "unreadable"
+            return DescribeResult(path, status=status, error=str(e)[:300])
+        secs = f"{info.duration:.0f}s" if info.duration else "unknown length"
+        instruction = (
+            f"The {len(frames)} image(s) above are frames sampled in order, evenly, from one video "
+            f"({secs}). Describe what the video shows overall in one factual line under 20 words. "
+            "Respond with ONLY a JSON array containing exactly 1 string, and nothing else."
+        )
+        items = [(path, f) for f in frames]
+        try:
+            text, usage = self._request(items, control, instruction=instruction,
+                                        label=lambda i, n: f"Frame {i} of {n}:")
+        except FatalEngineError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            return DescribeResult(path, status="error", error=_short(e))
+        share = _split_usage(self.model, usage, 1)[0]
+        if text is None:
+            return DescribeResult(path, status="error", error="refused by safety classifier", **share)
+        parsed = parse_summaries(text, 1)
+        if parsed is None:
+            return DescribeResult(path, status="error", error="unparseable response", **share)
+        prefix = f"Video, {secs}: " if info.duration else "Video: "
+        return DescribeResult(path, summary=prefix + parsed[0], status="ok", **share)
+
     def _describe_prepared(
         self, items: list[tuple[str, PreparedImage]], control: RunControl
     ) -> list[DescribeResult]:
@@ -115,11 +156,12 @@ class ApiEngine:
             out.extend(self._describe_prepared([item], control))
         return out
 
-    def _build_messages(self, items: list[tuple[str, PreparedImage]]) -> list[dict]:
+    def _build_messages(self, items: list[tuple[str, PreparedImage]], instruction: str | None = None,
+                        label=None) -> list[dict]:
         n = len(items)
         content: list[dict] = []
         for i, (_, img) in enumerate(items, start=1):
-            content.append({"type": "text", "text": f"Image {i} of {n}:"})
+            content.append({"type": "text", "text": label(i, n) if label else f"Image {i} of {n}:"})
             content.append(
                 {
                     "type": "image",
@@ -133,7 +175,7 @@ class ApiEngine:
         content.append(
             {
                 "type": "text",
-                "text": (
+                "text": instruction or (
                     f"Describe each of the {n} image(s) above. Respond with ONLY a JSON array of "
                     f"exactly {n} strings, one per image in the same order, and nothing else."
                 ),
@@ -142,10 +184,11 @@ class ApiEngine:
         return [{"role": "user", "content": content}]
 
     def _request(
-        self, items: list[tuple[str, PreparedImage]], control: RunControl
+        self, items: list[tuple[str, PreparedImage]], control: RunControl,
+        instruction: str | None = None, label=None,
     ) -> tuple[str | None, dict]:
         """Call the API with backoff. Returns (text, usage); text is None on a refusal."""
-        messages = self._build_messages(items)
+        messages = self._build_messages(items, instruction, label)
         attempt = 0
         while True:
             if not control.wait_if_paused():

@@ -31,6 +31,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-recursive", action="store_true", help="only the top-level folder")
     ap.add_argument("--dedupe-only", action="store_true",
                     help="hash files and link byte-identical duplicates, then export; no model calls")
+    ap.add_argument("--no-videos", action="store_true", help="skip video files")
+    ap.add_argument("--video-frames", type=int, default=5,
+                    help="frames sampled per video for its description (default 5)")
     ap.add_argument("--workers", type=int, default=4, help="parallel requests (default 4)")
     ap.add_argument("--batch-size", type=int, default=6, help="images per request (default 6)")
     ap.add_argument("--engine", choices=["api", "cli"], default="api",
@@ -68,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         output_csv=args.csv,
         output_json=args.json,
         dedupe_only=args.dedupe_only,
+        include_videos=not args.no_videos,
+        video_frames=args.video_frames,
         api_key=get_api_key() if args.engine == "api" and not args.dedupe_only else None,
     )
     if cfg.engine == "api" and not cfg.dedupe_only and not cfg.api_key:

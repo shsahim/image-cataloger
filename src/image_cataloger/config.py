@@ -74,6 +74,8 @@ class RunConfig:
     output_json: str = ""
     output_duplicates_csv: str = ""
     dedupe_only: bool = False  # hash, link duplicates, export; never call the model
+    include_videos: bool = True
+    video_frames: int = 5  # frames sampled per video for the description
     api_key: str | None = None
     request_timeout: float = 120.0
     max_attempts: int = 8
