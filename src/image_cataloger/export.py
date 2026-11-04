@@ -1,0 +1,75 @@
+"""Write the catalog as CSV and JSON."""
+from __future__ import annotations
+
+import csv
+import json
+import os
+import sqlite3
+import tempfile
+
+from .db import CatalogDB
+
+COLUMNS = [
+    "path", "summary", "width", "height", "bytes", "md5", "sha256",
+    "duplicate_of", "status", "error", "model",
+]
+
+
+def rows_for_export(db: CatalogDB) -> list[dict]:
+    rows = db.all_rows()
+    by_path: dict[str, sqlite3.Row] = {r["path"]: r for r in rows}
+    out: list[dict] = []
+    for r in rows:
+        summary = r["summary"]
+        if r["status"] == "duplicate" and r["duplicate_of"] in by_path:
+            summary = by_path[r["duplicate_of"]]["summary"]
+        out.append(
+            {
+                "path": r["path"],
+                "summary": summary or "",
+                "width": r["width"],
+                "height": r["height"],
+                "bytes": r["size"],
+                "md5": r["md5"],
+                "sha256": r["sha256"],
+                "duplicate_of": r["duplicate_of"] or "",
+                "status": r["status"],
+                "error": r["error"] or "",
+                "model": r["model"] or "",
+            }
+        )
+    return out
+
+
+def _atomic_write(path: str, write_fn) -> None:
+    parent = os.path.dirname(path) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=parent)
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
+            write_fn(f)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def export_csv(db: CatalogDB, path: str) -> int:
+    rows = rows_for_export(db)
+
+    def write(f):
+        w = csv.DictWriter(f, fieldnames=COLUMNS)
+        w.writeheader()
+        w.writerows(rows)
+
+    _atomic_write(path, write)
+    return len(rows)
+
+
+def export_json(db: CatalogDB, path: str) -> int:
+    rows = rows_for_export(db)
+    _atomic_write(path, lambda f: json.dump(rows, f, indent=1, ensure_ascii=False))
+    return len(rows)

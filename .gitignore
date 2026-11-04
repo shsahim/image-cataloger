@@ -1,0 +1,29 @@
+# virtualenvs / build
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# run outputs: never commit catalogs, databases or keys
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*_catalog.csv
+*_catalog.json
+catalog*.csv
+catalog*.json
+.env
+*.key
+secrets*
+
+# OS / editor
+.DS_Store
+._*
+.idea/
+.vscode/
